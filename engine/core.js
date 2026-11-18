@@ -934,7 +934,7 @@
 
   applyTheme();
 
-  function openCustomThemeModal() {
+  function openCustomThemeModal(initialFile) {
     let backdrop = document.getElementById('agy-custom-theme-modal-backdrop');
     if (!backdrop) {
       backdrop = document.createElement('div');
@@ -972,23 +972,38 @@
       backdrop.querySelector('#agy-theme-modal-close-btn').addEventListener('click', () => {
         backdrop.style.display = 'none';
       });
+      const sig = window.__AGY_SCROLL_AC__ ? window.__AGY_SCROLL_AC__.signal : undefined;
       window.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && backdrop.style.display !== 'none') {
           backdrop.style.display = 'none';
         }
-      });
+      }, { signal: sig });
+      window.addEventListener('paste', (e) => {
+        if (backdrop.style.display === 'none') return;
+        const items = (e.clipboardData && e.clipboardData.items) || [];
+        for (const it of items) {
+          if (it.type.startsWith('image/')) {
+            e.preventDefault();
+            if (typeof backdrop._handleAiFile === 'function') backdrop._handleAiFile(it.getAsFile());
+            return;
+          }
+        }
+      }, { signal: sig });
     }
 
     backdrop.style.display = 'flex';
     const body = backdrop.querySelector('#agy-theme-modal-body');
     renderThemePanels(body);
+    if (initialFile && typeof backdrop._handleAiFile === 'function') {
+      backdrop._handleAiFile(initialFile);
+    }
   }
 
   function escHtml(s) {
     return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   }
 
-  function renderThemePanels(container) {
+  function renderThemePanels(container, aiStatusHtml = '') {
     const st = getState();
     const defKey = getDefaultThemeKey();
     const mainTheme = THEMES[st.themeName] || THEMES[defKey] || {};
@@ -1001,6 +1016,20 @@
 
     container.innerHTML = `
       <div id="agy-theme-scroll-container" style="padding: 24px 32px 48px 32px; max-width: 860px; margin: 0 auto; overflow-y: auto; height: 100%; color: #f4f4f5;">
+        <div id="agy-studio-ai-drop" tabindex="0" style="border: 1.5px dashed ${mainTheme.primary || '#38bdf8'}; background: ${mainTheme.cardBg || 'rgba(22, 16, 14, 0.72)'}; border-radius: 12px; padding: 14px 20px; margin-bottom: 14px; cursor: pointer; display: flex; flex-direction: column; gap: 8px; transition: border-color 0.15s ease, background-color 0.15s ease;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <div style="width: 36px; height: 36px; border-radius: 10px; background: rgba(255,255,255,0.06); border: 1px solid ${mainTheme.borderColor}; display: flex; align-items: center; justify-content: center; font-size: 18px;">✨</div>
+              <div>
+                <div style="font-size: 14.5px; font-weight: 600; color: #f4f4f5;">Tạo Theme mới từ Ảnh (AI • agy CLI)</div>
+                <div style="font-size: 12px; color: #a1a1aa;">Thả ảnh vào đây, dán (Ctrl+V) hoặc bấm để chọn ảnh — tự thiết kế bảng màu &amp; hoa văn SVG riêng</div>
+              </div>
+            </div>
+            <span style="padding: 5px 12px; border-radius: 8px; background: ${mainTheme.primary || '#38bdf8'}; color: #090d16; font-weight: 600; font-size: 12px; white-space: nowrap;">Chọn ảnh…</span>
+            <input id="agy-studio-ai-file" type="file" accept="image/*" style="display: none;" />
+          </div>
+          <div id="agy-studio-ai-status" style="font-size: 12.5px; color: #e4e4e7; ${aiStatusHtml ? '' : 'display:none;'}">${aiStatusHtml}</div>
+        </div>
         <div style="border: 1px solid ${mainTheme.borderColor}; background: ${mainTheme.cardBg || 'rgba(22, 16, 14, 0.72)'}; border-radius: 12px; padding: 16px 20px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 12px;">
           <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div>
@@ -1233,6 +1262,51 @@
           turbo.style.color = activeTh.primary;
         }
       });
+    }
+
+    const aiDrop = container.querySelector('#agy-studio-ai-drop');
+    const aiInput = container.querySelector('#agy-studio-ai-file');
+    const modalBackdrop = document.getElementById('agy-custom-theme-modal-backdrop');
+    const handleAiFile = async (file) => {
+      if (!file) return;
+      if (modalBackdrop && modalBackdrop._aiTimer) { clearInterval(modalBackdrop._aiTimer); modalBackdrop._aiTimer = null; }
+      const started = Date.now();
+      let baseMsg = 'Đang chuẩn bị ảnh…';
+      const paint = () => {
+        const s0 = container.querySelector('#agy-studio-ai-status');
+        if (s0) {
+          s0.style.display = 'block';
+          s0.innerHTML = `⏳ ${escHtml(baseMsg)} (${Math.floor((Date.now() - started) / 1000)}s)`;
+        }
+      };
+      paint();
+      if (modalBackdrop) modalBackdrop._aiTimer = setInterval(paint, 1000);
+      try {
+        const r = await createThemeFromImageFile(file, (m) => { baseMsg = m; paint(); });
+        if (modalBackdrop && modalBackdrop._aiTimer) { clearInterval(modalBackdrop._aiTimer); modalBackdrop._aiTimer = null; }
+        const sw = (c) => `<span style="display:inline-block;width:16px;height:16px;border-radius:4px;background:${toHex(c)};border:1px solid rgba(255,255,255,0.3);vertical-align:middle;"></span>`;
+        const okHtml = `<div style="display:flex;align-items:center;gap:10px;padding-top:6px;"><img src="${r.wallpaper}" style="width:64px;height:40px;object-fit:cover;border-radius:6px;"><div>✅ Đã tạo &amp; áp dụng <b>${escHtml(r.name)}</b> (${r.ai ? 'AI design' : 'Auto palette'}) ${sw(r.pal.primary)} ${sw(r.pal.secondary)}${r.aiNote ? `<div style="opacity:0.8;margin-top:2px;">⚠️ ${escHtml(r.aiNote)}</div>` : ''}</div></div>`;
+        renderThemePanels(container, okHtml);
+      } catch (err) {
+        if (modalBackdrop && modalBackdrop._aiTimer) { clearInterval(modalBackdrop._aiTimer); modalBackdrop._aiTimer = null; }
+        const s1 = container.querySelector('#agy-studio-ai-status');
+        if (s1) {
+          s1.style.display = 'block';
+          s1.innerHTML = `⚠️ ${escHtml(err.message || err)}`;
+        }
+      }
+    };
+    if (modalBackdrop) modalBackdrop._handleAiFile = handleAiFile;
+    if (aiDrop && aiInput) {
+      aiDrop.addEventListener('click', (e) => { if (e.target !== aiInput) aiInput.click(); });
+      aiDrop.addEventListener('dragover', (e) => { e.preventDefault(); aiDrop.style.background = 'rgba(255, 255, 255, 0.08)'; });
+      aiDrop.addEventListener('dragleave', () => { aiDrop.style.background = mainTheme.cardBg || 'rgba(22, 16, 14, 0.72)'; });
+      aiDrop.addEventListener('drop', (e) => {
+        e.preventDefault();
+        aiDrop.style.background = mainTheme.cardBg || 'rgba(22, 16, 14, 0.72)';
+        handleAiFile(e.dataTransfer.files && e.dataTransfer.files[0]);
+      });
+      aiInput.addEventListener('change', () => handleAiFile(aiInput.files && aiInput.files[0]));
     }
 
     const slider = container.querySelector('#agy-dim-slider');
@@ -2295,20 +2369,20 @@
     btn.setAttribute('aria-label', 'Create theme from image');
     btn.setAttribute('aria-haspopup', 'menu');
     btn.setAttribute('aria-expanded', 'false');
-    btn.title = 'Tạo theme từ ảnh';
+    btn.title = 'Custom Theme Studio (hoặc thả ảnh vào đây)';
     btn.className = 'agy-button agy-button-icon-lg inline-flex items-center font-medium transition-colors select-none outline-none cursor-pointer justify-center h-7 w-7 shrink-0 rounded-lg bg-transparent text-secondary-foreground hover:text-foreground hover:bg-secondary focus-visible:text-foreground focus-visible:bg-secondary';
     btn.style.cssText = 'app-region: no-drag;';
     btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:none;"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>';
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      openImageThemePopup(btn);
+      openCustomThemeModal();
     });
     const dropFile = (e) => { const f = e.dataTransfer && Array.from(e.dataTransfer.files || []).find((x) => /^image\//.test(x.type)); return f || null; };
     btn.addEventListener('dragenter', (e) => { e.preventDefault(); btn.style.boxShadow = '0 0 0 2px ' + ((THEMES[getState().themeName] || {}).primary || '#38bdf8'); });
     btn.addEventListener('dragover', (e) => { e.preventDefault(); });
     btn.addEventListener('dragleave', () => { btn.style.boxShadow = ''; });
-    btn.addEventListener('drop', (e) => { e.preventDefault(); e.stopPropagation(); btn.style.boxShadow = ''; const f = dropFile(e); openImageThemePopup(btn, f); });
+    btn.addEventListener('drop', (e) => { e.preventDefault(); e.stopPropagation(); btn.style.boxShadow = ''; const f = dropFile(e); openCustomThemeModal(f); });
     group.insertBefore(btn, group.firstChild);
   }
 
