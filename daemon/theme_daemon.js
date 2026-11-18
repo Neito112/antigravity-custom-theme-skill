@@ -19,6 +19,7 @@ if (typeof globalThis.WebSocket !== 'function') {
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const PID_FILE = path.join(ROOT_DIR, 'daemon.pid');
+const { designTheme } = require('./theme_designer');
 const CONFIG_FILE = process.env.AGY_CONFIG_PATH || path.join(ROOT_DIR, 'theme_config.json');
 const DIST_DIR = path.join(ROOT_DIR, 'dist');
 const PAYLOAD_PATH = path.join(DIST_DIR, 'theme_payload.js');
@@ -197,6 +198,12 @@ function createSession(target) {
         });
     }
 
+    session.evalExpr = async (expression) => {
+        try {
+            await send('Runtime.evaluate', { expression, awaitPromise: false });
+        } catch (_) {}
+    };
+
     session.reinject = async () => {
         const src = buildInjectedSource();
         if (!src) return;
@@ -224,14 +231,40 @@ function createSession(target) {
         if (msg.method === 'Runtime.bindingCalled' && msg.params && msg.params.name === 'agySaveThemeConfig') {
             try {
                 const payload = JSON.parse(msg.params.payload || '{}');
-                saveConfig(payload);
+                const merged = saveConfig(payload);
+                const syncExpr = merged
+                    ? `window.__AGY_INITIAL_CONFIG__ = ${JSON.stringify(merged)};`
+                    : '';
                 for (const other of sessions.values()) {
                     if (other.id !== target.id) {
+                        if (syncExpr) {
+                            other.evalExpr && other.evalExpr(syncExpr);
+                        }
                         other.reinject();
                     }
                 }
             } catch (err) {
                 log(`Config binding error: ${err.message}`);
+            }
+            return;
+        }
+
+        if (msg.method === 'Runtime.bindingCalled' && msg.params && msg.params.name === 'agyDesignTheme') {
+            let job = null;
+            try {
+                job = JSON.parse(msg.params.payload || '{}');
+            } catch (_) {}
+            if (job && job.id && job.image) {
+                const reply = (obj) => {
+                    const expr = `window.__AGY_DESIGN_RESULT__ && window.__AGY_DESIGN_RESULT__(${JSON.stringify(job.id)}, ${JSON.stringify(JSON.stringify(obj))})`;
+                    send('Runtime.evaluate', { expression: expr }).catch(() => {});
+                };
+                designTheme(job.image, { log })
+                    .then((theme) => reply({ theme }))
+                    .catch((err) => {
+                        log(`Theme design failed: ${err.message}`);
+                        reply({ error: err.message });
+                    });
             }
             return;
         }
@@ -246,7 +279,16 @@ function createSession(target) {
             await send('Page.enable');
             await send('Runtime.enable');
             try {
+                await send('Runtime.evaluate', {
+                    expression: 'delete window.agySaveThemeConfig; delete window.agyDesignTheme;',
+                    awaitPromise: false,
+                });
+            } catch (_) {}
+            try {
                 await send('Runtime.addBinding', { name: 'agySaveThemeConfig' });
+            } catch (_) {}
+            try {
+                await send('Runtime.addBinding', { name: 'agyDesignTheme' });
             } catch (_) {}
 
             const src = buildInjectedSource();

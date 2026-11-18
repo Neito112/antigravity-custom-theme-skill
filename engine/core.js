@@ -1,7 +1,12 @@
 (() => {
   const THEMES = /*__THEMES_PLACEHOLDER__*/{};
+  const BUILTIN_THEMES = { ...THEMES };
+  const BUILTIN_KEYS = new Set(Object.keys(BUILTIN_THEMES));
   const THEME_KEYS = Object.keys(THEMES);
   const DEFAULT_THEME_KEY = THEME_KEYS[0] || 'Default';
+  const STORAGE_CUSTOM_THEMES = 'agy_custom_themes_v1';
+  const STORAGE_HIDDEN_BUILTINS = 'agy_hidden_builtins_v1';
+  registerCustomThemes();
 
   const STORAGE_THEME = 'agy_theme_v3';
   const STORAGE_BUBBLE = 'agy_bubble_v3';
@@ -36,10 +41,15 @@
     }
   };
 
+  function getDefaultThemeKey() {
+    return (THEMES[DEFAULT_THEME_KEY] ? DEFAULT_THEME_KEY : THEME_KEYS[0]) || DEFAULT_THEME_KEY;
+  }
+
   function getState() {
     const init = window.__AGY_INITIAL_CONFIG__ || {};
-    const rawTheme = localStorage.getItem(STORAGE_THEME) || init.themeName || DEFAULT_THEME_KEY;
-    const themeName = THEMES[rawTheme] ? rawTheme : DEFAULT_THEME_KEY;
+    const defKey = getDefaultThemeKey();
+    const rawTheme = localStorage.getItem(STORAGE_THEME) || init.themeName || defKey;
+    const themeName = THEMES[rawTheme] ? rawTheme : defKey;
     const rawBubble = localStorage.getItem(STORAGE_BUBBLE) || init.bubbleName || themeName;
     const bubbleName = THEMES[rawBubble] ? rawBubble : themeName;
     const inputStyle = localStorage.getItem(STORAGE_INPUT) || init.inputStyle || 'sync';
@@ -167,7 +177,7 @@
       } catch (e) {}
     }
 
-    const mainTheme = THEMES[st.themeName] || THEMES[DEFAULT_THEME_KEY];
+    const mainTheme = THEMES[st.themeName] || THEMES[getDefaultThemeKey()] || {};
     const bubbleTheme = THEMES[st.bubbleName] || mainTheme;
     const wpUrl = st.customWp || mainTheme.wallpaper || '';
 
@@ -865,7 +875,7 @@
 
   function syncTitleBarOverlay(stOverride) {
     const st = stOverride || getState();
-    const activeTh = THEMES[st.themeName] || THEMES[DEFAULT_THEME_KEY] || {};
+    const activeTh = THEMES[st.themeName] || THEMES[getDefaultThemeKey()] || {};
     if (window.electronNative && typeof window.electronNative.setTitleBarOverlay === 'function') {
       try {
         window.electronNative.setTitleBarOverlay({
@@ -974,11 +984,20 @@
     renderThemePanels(body);
   }
 
+  function escHtml(s) {
+    return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
   function renderThemePanels(container) {
     const st = getState();
-    const mainTheme = THEMES[st.themeName] || THEMES[DEFAULT_THEME_KEY];
+    const defKey = getDefaultThemeKey();
+    const mainTheme = THEMES[st.themeName] || THEMES[defKey] || {};
     const effUserAv = st.userAvatar === 'none' ? '' : (st.userAvatar || mainTheme.userAvatar || '');
     const effAgentAv = st.agentAvatar === 'none' ? '' : (st.agentAvatar || mainTheme.agentAvatar || '');
+    const hiddenBuiltins = loadHiddenBuiltins();
+    const customCount = THEME_KEYS.filter((k) => !BUILTIN_KEYS.has(k)).length;
+    const badge = document.getElementById('agy-custom-theme-badge');
+    if (badge) badge.textContent = `${THEME_KEYS.length} Preset${THEME_KEYS.length > 1 ? 's' : ''}`;
 
     container.innerHTML = `
       <div id="agy-theme-scroll-container" style="padding: 24px 32px 48px 32px; max-width: 860px; margin: 0 auto; overflow-y: auto; height: 100%; color: #f4f4f5;">
@@ -1132,12 +1151,22 @@
         </div>
 
         <div>
-          <div style="font-size: 15px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">Theme Presets (${THEME_KEYS.length})</div>
-          <div style="font-size: 12.5px; color: #a1a1aa; margin-bottom: 14px;">Complete backdrop, palette, unified L-glass, and matching ornaments.</div>
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 10px; margin-bottom: 14px;">
+            <div>
+              <div style="font-size: 15px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">Theme Presets (${THEME_KEYS.length})</div>
+              <div style="font-size: 12.5px; color: #a1a1aa;">Complete backdrop, palette, unified L-glass, and matching ornaments.</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              ${hiddenBuiltins.length ? `<button id="agy-restore-builtins-btn" type="button" style="padding: 5px 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.16); color: #f4f4f5; font-size: 12px; cursor: pointer; white-space: nowrap;">↺ Khôi phục preset gốc (${hiddenBuiltins.length})</button>` : ''}
+              ${customCount ? `<button id="agy-clear-custom-btn" type="button" style="padding: 5px 10px; border-radius: 8px; background: rgba(239, 68, 68, 0.14); border: 1px solid rgba(239, 68, 68, 0.35); color: #fca5a5; font-size: 12px; cursor: pointer; white-space: nowrap;">🗑️ Xóa tất cả tự tạo (${customCount})</button>` : ''}
+            </div>
+          </div>
           <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
             ${THEME_KEYS.map(name => {
               const th = THEMES[name];
               const isSelected = name === st.themeName;
+              const canDelete = THEME_KEYS.length > 1;
+              const isBuiltin = BUILTIN_KEYS.has(name);
               const thumbBg = th.wallpaper
                 ? `linear-gradient(180deg, rgba(0,0,0,0.15), rgba(14,12,12,0.85)), url('${th.wallpaper}')`
                 : (th.pureBg || th.bg);
@@ -1145,13 +1174,14 @@
                 ? 'right: 10px; bottom: 8px; width: 76px; height: 24px; background-position: center;'
                 : 'right: 12px; bottom: 4px; width: 42px; height: 38px; background-position: bottom center;';
               return `
-                <div class="agy-preset-card" data-name="${name}" style="border-radius: 12px; border: ${isSelected ? '1.5px solid #f4f4f5' : '1px solid rgba(255, 255, 255, 0.12)'}; background: rgba(14, 12, 12, 0.82); overflow: hidden; cursor: pointer; display: flex; flex-direction: column; transition: border-color 0.15s ease;">
+                <div class="agy-preset-card" data-name="${escHtml(name)}" style="position: relative; border-radius: 12px; border: ${isSelected ? '1.5px solid #f4f4f5' : '1px solid rgba(255, 255, 255, 0.12)'}; background: rgba(14, 12, 12, 0.82); overflow: hidden; cursor: pointer; display: flex; flex-direction: column; transition: border-color 0.15s ease;">
+                  ${canDelete ? `<button class="agy-delete-preset-btn" data-del-preset="${escHtml(name)}" type="button" title="${isBuiltin ? 'Ẩn preset gốc' : 'Xóa preset'}" style="position: absolute; top: 8px; right: 8px; z-index: 3; width: 26px; height: 26px; border-radius: 7px; border: 1px solid rgba(255, 255, 255, 0.22); background: rgba(10, 12, 18, 0.72); color: #fca5a5; font-size: 12px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background-color 0.15s ease, border-color 0.15s ease;">🗑️</button>` : ''}
                   <div style="height: 68px; width: 100%; background-image: ${thumbBg}; background-size: cover; background-position: ${th.bgPosition || 'center'}; position: relative; display: flex; align-items: flex-end; padding: 8px 14px;">
                     ${th.sticker ? `<div style="position: absolute; ${thumbOrnamentStyle} background-image: url('${th.sticker}'); background-size: contain; background-repeat: no-repeat; pointer-events: none;"></div>` : ''}
-                    <span style="font-size: 13.5px; font-weight: 600; color: #fff;">${name}</span>
+                    <span style="font-size: 13.5px; font-weight: 600; color: #fff;">${escHtml(name)}</span>
                   </div>
                   <div style="padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-size: 12px; color: #a1a1aa;">${th.concept || ''}</span>
+                    <span style="font-size: 12px; color: #a1a1aa;">${escHtml(th.concept || '')}</span>
                     <div class="agy-card-check-slot">${isSelected ? CHECK_SVG : ''}</div>
                   </div>
                 </div>
@@ -1163,7 +1193,7 @@
     `;
 
     function updateInputPreviews(bName) {
-      const activeTh = THEMES[bName] || THEMES[DEFAULT_THEME_KEY];
+      const activeTh = THEMES[bName] || THEMES[getDefaultThemeKey()] || {};
       container.querySelectorAll('.agy-input-card').forEach(card => {
         const key = card.dataset.style;
         const outer = card.querySelector('.agy-input-preview-outer');
@@ -1383,9 +1413,10 @@
       localStorage.removeItem(STORAGE_INPUT);
       localStorage.removeItem(STORAGE_DIMMING);
       localStorage.removeItem(STORAGE_WP_ENABLED);
+      const resetDefKey = getDefaultThemeKey();
       applyTheme({
-        themeName: DEFAULT_THEME_KEY,
-        bubbleName: DEFAULT_THEME_KEY,
+        themeName: resetDefKey,
+        bubbleName: resetDefKey,
         inputStyle: 'sync',
         dimming: 69,
         wpEnabled: true,
@@ -1396,7 +1427,7 @@
         avatarSize: 32,
         avatarRadius: 50
       });
-      const defTh = THEMES[DEFAULT_THEME_KEY] || {};
+      const defTh = THEMES[resetDefKey] || {};
       syncAvPreview(userAvPreview, defTh.userAvatar || '', 'U');
       syncAvPreview(agentAvPreview, defTh.agentAvatar || '', 'AI');
       if (userAvPreview) userAvPreview.style.borderRadius = '50%';
@@ -1412,13 +1443,13 @@
       if (wpToggle) wpToggle.checked = true;
 
       container.querySelectorAll('.agy-preset-card').forEach(c => {
-        const isSel = c.dataset.name === DEFAULT_THEME_KEY;
+        const isSel = c.dataset.name === resetDefKey;
         c.style.border = isSel ? '1.5px solid #f4f4f5' : '1px solid rgba(255, 255, 255, 0.12)';
         const slot = c.querySelector('.agy-card-check-slot');
         if (slot) slot.innerHTML = isSel ? CHECK_SVG : '';
       });
       container.querySelectorAll('.agy-bubble-card').forEach(b => {
-        const isSel = b.dataset.name === DEFAULT_THEME_KEY;
+        const isSel = b.dataset.name === resetDefKey;
         b.style.border = isSel ? '1.5px solid #f4f4f5' : '1px solid rgba(255, 255, 255, 0.12)';
         b.style.background = isSel ? 'rgba(42, 34, 30, 0.68)' : 'rgba(14, 12, 12, 0.78)';
         const slot = b.querySelector('.agy-card-check-slot');
@@ -1431,7 +1462,43 @@
         const slot = c.querySelector('.agy-card-check-slot');
         if (slot) slot.innerHTML = isSel ? CHECK_SVG : '';
       });
-      updateInputPreviews(DEFAULT_THEME_KEY);
+      updateInputPreviews(resetDefKey);
+    });
+
+    const clearCustomBtn = container.querySelector('#agy-clear-custom-btn');
+    if (clearCustomBtn) {
+      clearCustomBtn.addEventListener('click', () => {
+        if (clearAllCustomThemes()) openCustomThemeModal();
+      });
+    }
+
+    const restoreBuiltinsBtn = container.querySelector('#agy-restore-builtins-btn');
+    if (restoreBuiltinsBtn) {
+      restoreBuiltinsBtn.addEventListener('click', () => {
+        restoreBuiltinThemes();
+        openCustomThemeModal();
+      });
+    }
+
+    container.querySelectorAll('.agy-delete-preset-btn').forEach(btn => {
+      btn.addEventListener('mouseenter', () => {
+        btn.style.background = 'rgba(239, 68, 68, 0.85)';
+        btn.style.borderColor = 'rgba(254, 202, 202, 0.75)';
+        btn.style.color = '#ffffff';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.background = 'rgba(10, 12, 18, 0.72)';
+        btn.style.borderColor = 'rgba(255, 255, 255, 0.22)';
+        btn.style.color = '#fca5a5';
+      });
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const name = btn.dataset.delPreset;
+        if (name && deletePreset(name)) {
+          openCustomThemeModal();
+        }
+      });
     });
 
     container.querySelectorAll('.agy-preset-card').forEach(card => {
@@ -1651,7 +1718,602 @@
     syncShellMetrics();
   }
 
+  // ---- Image -> theme generator (top bar popup) ----
+  const MAX_CUSTOM_THEMES = 8;
+
+  function loadHiddenBuiltins() {
+    const raw = localStorage.getItem(STORAGE_HIDDEN_BUILTINS);
+    if (raw !== null) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed.filter((k) => BUILTIN_KEYS.has(k));
+      } catch (e) {}
+    }
+    const init = (window.__AGY_INITIAL_CONFIG__ && Array.isArray(window.__AGY_INITIAL_CONFIG__.hiddenBuiltins))
+      ? window.__AGY_INITIAL_CONFIG__.hiddenBuiltins
+      : [];
+    return init.filter((k) => BUILTIN_KEYS.has(k));
+  }
+
+  function persistHiddenBuiltins(list) {
+    const clean = Array.from(new Set(list.filter((k) => BUILTIN_KEYS.has(k))));
+    if (window.__AGY_INITIAL_CONFIG__) window.__AGY_INITIAL_CONFIG__.hiddenBuiltins = [...clean];
+    try { localStorage.setItem(STORAGE_HIDDEN_BUILTINS, JSON.stringify(clean)); } catch (e) {}
+    if (window.agySaveThemeConfig) {
+      try { window.agySaveThemeConfig(JSON.stringify({ hiddenBuiltins: clean })); } catch (e) {}
+    }
+  }
+
+  function loadCustomThemes() {
+    const raw = localStorage.getItem(STORAGE_CUSTOM_THEMES);
+    if (raw !== null) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+      } catch (e) {}
+    }
+    const init = (window.__AGY_INITIAL_CONFIG__ && window.__AGY_INITIAL_CONFIG__.customThemes) || {};
+    return { ...init };
+  }
+
+  function registerCustomThemes() {
+    const all = loadCustomThemes();
+    Object.keys(all).forEach((name) => {
+      if (BUILTIN_KEYS.has(name)) return;
+      THEMES[name] = all[name];
+      if (!THEME_KEYS.includes(name)) THEME_KEYS.push(name);
+    });
+    const hidden = new Set(loadHiddenBuiltins());
+    hidden.forEach((name) => {
+      if (!BUILTIN_KEYS.has(name) || THEME_KEYS.length <= 1) return;
+      delete THEMES[name];
+      const ix = THEME_KEYS.indexOf(name);
+      if (ix >= 0) THEME_KEYS.splice(ix, 1);
+    });
+  }
+
+  function persistCustomThemes(all) {
+    if (window.__AGY_INITIAL_CONFIG__) window.__AGY_INITIAL_CONFIG__.customThemes = { ...all };
+    try { localStorage.setItem(STORAGE_CUSTOM_THEMES, JSON.stringify(all)); } catch (e) {}
+    if (window.agySaveThemeConfig) {
+      try { window.agySaveThemeConfig(JSON.stringify({ customThemes: all })); } catch (e) {}
+    }
+  }
+
+  function rgbToHsv(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    let h = 0;
+    if (d) {
+      if (mx === r) h = ((g - b) / d) % 6;
+      else if (mx === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h *= 60; if (h < 0) h += 360;
+    }
+    return [h, mx ? d / mx : 0, mx];
+  }
+
+  function hsvToRgb(h, s, v) {
+    h = ((h % 360) + 360) % 360;
+    const c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c;
+    let r = 0, g = 0, b = 0;
+    if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; } else if (h < 180) { g = c; b = x; }
+    else if (h < 240) { g = x; b = c; } else if (h < 300) { r = x; b = c; } else { r = c; b = x; }
+    return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+  }
+
+  const hex2 = (n) => n.toString(16).padStart(2, '0');
+  const toHex = (c) => '#' + c.map(hex2).join('');
+  const rgba = (c, a) => `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${a})`;
+
+  function analyzePalette(img) {
+    const S = 64;
+    const cv = document.createElement('canvas');
+    cv.width = S; cv.height = S;
+    const cx = cv.getContext('2d', { willReadFrequently: true });
+    cx.drawImage(img, 0, 0, S, S);
+    const data = cx.getImageData(0, 0, S, S).data;
+    let ar = 0, ag = 0, ab = 0, n = 0;
+    const B = 24;
+    const buckets = Array.from({ length: B }, () => ({ w: 0, r: 0, g: 0, b: 0 }));
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 128) continue;
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      ar += r; ag += g; ab += b; n++;
+      const [h, s, v] = rgbToHsv(r, g, b);
+      if (s < 0.22 || v < 0.3) continue;
+      const w = s * v * v;
+      const bk = buckets[Math.floor(h / (360 / B)) % B];
+      bk.w += w; bk.r += r * w; bk.g += g * w; bk.b += b * w;
+    }
+    n = Math.max(1, n);
+    const avg = [Math.round(ar / n), Math.round(ag / n), Math.round(ab / n)];
+    const lum = (0.2126 * avg[0] + 0.7152 * avg[1] + 0.0722 * avg[2]) / 255;
+    const sorted = buckets.map((bk, i) => ({ ...bk, i })).filter((bk) => bk.w > 0).sort((a, b) => b.w - a.w);
+    const isLight = lum > 0.62;
+    const tune = (c, sMin, vMin, vMax) => {
+      const [h, s, v] = rgbToHsv(c[0], c[1], c[2]);
+      return hsvToRgb(h, Math.max(s, sMin), Math.min(vMax, Math.max(v, vMin)));
+    };
+    let primary, secondary;
+    if (sorted.length) {
+      const p = sorted[0];
+      primary = [Math.round(p.r / p.w), Math.round(p.g / p.w), Math.round(p.b / p.w)];
+      const q = sorted.find((bk) => {
+        const d = Math.abs(bk.i - p.i); return Math.min(d, B - d) >= 3;
+      });
+      if (q) secondary = [Math.round(q.r / q.w), Math.round(q.g / q.w), Math.round(q.b / q.w)];
+      else { const [h, s, v] = rgbToHsv(primary[0], primary[1], primary[2]); secondary = hsvToRgb(h + 35, s * 0.8, v); }
+    } else {
+      const base = isLight ? [71, 85, 105] : [148, 163, 184];
+      primary = base; secondary = base.map((x) => Math.min(255, x + 40));
+    }
+    if (isLight) { primary = tune(primary, 0.5, 0.45, 0.7); secondary = tune(secondary, 0.4, 0.45, 0.72); }
+    else { primary = tune(primary, 0.45, 0.72, 0.97); secondary = tune(secondary, 0.35, 0.65, 0.95); }
+    const overlay = isLight
+      ? avg.map((x) => Math.round(x + (255 - x) * 0.85))
+      : avg.map((x) => Math.round(x * 0.1));
+    return { avg, lum, isLight, primary, secondary, overlay };
+  }
+
+  function makeOrnaments(p, s, o) {
+    const P = toHex(p), S = toHex(s);
+    const tint = toHex(p.map((x) => Math.round(x + (255 - x) * 0.82)));
+    const orb = toHex(o.map((x) => Math.round(x * 0.5)));
+    const corner = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 44" fill="none"><path d="M 3 26 L 3 9 Q 3 3 9 3 L 26 3" stroke="${P}" stroke-width="1.6" stroke-linecap="round" opacity="0.85"/><path d="M 7 19 L 7 11 Q 7 7 11 7 L 19 7" stroke="${S}" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/><path d="M 8.5 4.5 L 9.5 7.5 L 12.5 8.5 L 9.5 9.5 L 8.5 12.5 L 7.5 9.5 L 4.5 8.5 L 7.5 7.5 Z" fill="${tint}"/><circle cx="29" cy="3" r="1.5" fill="${P}" opacity="0.85"/><path d="M 2 34 Q 18 18 34 2" stroke="${P}" stroke-opacity="0.4" stroke-width="0.9" stroke-dasharray="2 3"/></svg>`;
+    const sticker = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 38" fill="none"><defs><linearGradient id="og" x1="0%" y1="50%" x2="100%" y2="50%"><stop offset="0%" stop-color="${P}" stop-opacity="0.1"/><stop offset="40%" stop-color="${P}" stop-opacity="0.9"/><stop offset="70%" stop-color="${tint}" stop-opacity="0.95"/><stop offset="100%" stop-color="${S}" stop-opacity="0.2"/></linearGradient><radialGradient id="pg" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="${orb}"/><stop offset="85%" stop-color="${orb}"/><stop offset="100%" stop-color="${P}" stop-opacity="0.8"/></radialGradient></defs><path d="M 6 26 Q 64 6 122 22" stroke="url(#og)" stroke-width="1.3" stroke-linecap="round"/><path d="M 16 30 Q 64 12 112 25" stroke="${P}" stroke-width="0.75" stroke-dasharray="2 3" opacity="0.6"/><g transform="translate(64, 18)"><circle cx="0" cy="0" r="7.5" fill="url(#pg)" stroke="${P}" stroke-width="0.8"/><ellipse cx="0" cy="0" rx="14" ry="4.2" stroke="${tint}" stroke-width="0.9" transform="rotate(-15)" opacity="0.85"/></g><path d="M 22 18 L 23.2 15 L 26 14 L 23.2 13 L 22 10 L 20.8 13 L 18 14 L 20.8 15 Z" fill="${tint}" opacity="0.9"/><path d="M 104 15 L 105 12.8 L 107 12 L 105 11.2 L 104 9 L 103 11.2 L 101 12 L 103 12.8 Z" fill="${P}" opacity="0.85"/><circle cx="38" cy="14" r="1.2" fill="#ffffff" opacity="0.75"/><circle cx="90" cy="22" r="1.1" fill="${S}" opacity="0.8"/></svg>`;
+    const uri = (svg) => 'data:image/svg+xml,' + encodeURIComponent(svg);
+    return { cornerSvg: uri(corner), sticker: uri(sticker) };
+  }
+
+  function buildThemeFromPalette(pal, wallpaper, concept) {
+    const p = pal.primary, s = pal.secondary, o = pal.overlay;
+    const ov = o.join(', ');
+    const L = pal.isLight;
+    const dark = (a) => `rgba(${ov}, ${a})`;
+    const t = {
+      concept,
+      primary: toHex(p), secondary: toHex(s),
+      glow: rgba(p, 0.28), secondaryGlow: rgba(s, 0.22),
+      bg: `linear-gradient(145deg, rgba(${Math.round(p[0] * 0.18)}, ${Math.round(p[1] * 0.18)}, ${Math.round(p[2] * 0.18)}, 0.9) 0%, rgba(6, 8, 14, 0.94) 100%)`,
+      frameBg: `linear-gradient(135deg, ${rgba(p, 0.72)} 0%, ${rgba(s, 0.5)} 50%, ${rgba(p, 0.6)} 100%)`,
+      textColor: '#f8fafc',
+      borderColor: rgba(p, 0.34), innerBorder: `1px solid ${rgba(p, 0.16)}`,
+      clearBackdrop: true, overlayRgb: ov, bgPosition: 'center center',
+      sidebarBg: dark(L ? 0.3 : 0.24), sidebarBlur: '3px', sidebarHoverBg: rgba(p, 0.16), sidebarEnhanceText: true,
+      aiCardBg: L ? 'rgba(255, 255, 255, 0.72)' : dark(0.74), aiCardBorder: rgba(p, 0.2),
+      headerBg: dark(L ? 0.3 : 0.24), headerBlur: '3px', headerBorder: rgba(p, 0.12),
+      unifiedGlass: true,
+      btnBg: L ? 'rgba(255, 255, 255, 0.6)' : `rgba(${Math.round(p[0] * 0.12 + 8)}, ${Math.round(p[1] * 0.12 + 14)}, ${Math.round(p[2] * 0.12 + 24)}, 0.58)`,
+      inputGlassBg: L ? 'rgba(255, 255, 255, 0.6)' : dark(0.58),
+      inputCardBg: L ? 'linear-gradient(145deg, rgba(255, 255, 255, 0.86) 0%, rgba(241, 245, 249, 0.9) 100%)' : `linear-gradient(145deg, rgba(${Math.round(p[0] * 0.14)}, ${Math.round(p[1] * 0.14)}, ${Math.round(p[2] * 0.14)}, 0.9) 0%, rgba(5, 8, 14, 0.95) 100%)`,
+      modalBg: L ? 'rgba(248, 250, 252, 0.97)' : `rgba(${Math.round(p[0] * 0.08 + 5)}, ${Math.round(p[1] * 0.08 + 8)}, ${Math.round(p[2] * 0.08 + 14)}, 0.97)`,
+      modalHeaderBg: L ? 'rgba(226, 232, 240, 0.92)' : `rgba(${Math.round(p[0] * 0.12 + 8)}, ${Math.round(p[1] * 0.12 + 12)}, ${Math.round(p[2] * 0.12 + 20)}, 0.92)`,
+      cardBg: L ? 'rgba(255, 255, 255, 0.82)' : `rgba(${Math.round(p[0] * 0.1 + 8)}, ${Math.round(p[1] * 0.1 + 12)}, ${Math.round(p[2] * 0.1 + 22)}, 0.82)`,
+      cardSelectedBg: rgba(p, L ? 0.2 : 0.22),
+      wallpaper, isOrnament: true, ...makeOrnaments(p, s, o), stickerW: 96, stickerH: 30, stickerTop: -15, stickerRight: 14,
+      isCustomImageTheme: true
+    };
+    if (L) {
+      t.isLight = true; t.uiTextColor = '#0f172a'; t.uiMutedColor = '#475569';
+      t.pillBg = 'rgba(255, 255, 255, 0.55)'; t.pillHoverBg = 'rgba(255, 255, 255, 0.8)';
+      t.pillTextColor = '#0f172a'; t.pillBorder = rgba(p, 0.35);
+    }
+    return t;
+  }
+
+  function loadImageFromFile(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => resolve({ img, url });
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Không đọc được ảnh')); };
+      img.src = url;
+    });
+  }
+
+  function downscaleToDataUrl(img, maxSide, mime) {
+    const k = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(img.naturalWidth * k));
+    cv.height = Math.max(1, Math.round(img.naturalHeight * k));
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    if (mime === 'image/jpeg') return cv.toDataURL('image/jpeg', 0.88);
+    let out = cv.toDataURL('image/webp', 0.82);
+    if (!out.startsWith('data:image/webp')) out = cv.toDataURL('image/jpeg', 0.85);
+    return out;
+  }
+
+  // ---- AI design (agy CLI via daemon) ----
+  window.__AGY_DESIGN_PENDING__ = window.__AGY_DESIGN_PENDING__ || {};
+  window.__AGY_DESIGN_RESULT__ = (id, json) => {
+    const p = window.__AGY_DESIGN_PENDING__[id];
+    if (!p) return;
+    delete window.__AGY_DESIGN_PENDING__[id];
+    clearTimeout(p.t);
+    try {
+      const r = JSON.parse(json);
+      if (r.error) p.reject(new Error(r.error)); else p.resolve(r.theme);
+    } catch (e) { p.reject(e); }
+  };
+
+  function requestAiDesign(refDataUrl) {
+    if (typeof window.agyDesignTheme !== 'function') {
+      return Promise.reject(new Error('Daemon chưa hỗ trợ thiết kế bằng AI (khởi động lại daemon)'));
+    }
+    return new Promise((resolve, reject) => {
+      const id = 'd' + Date.now() + Math.random().toString(36).slice(2, 6);
+      const t = setTimeout(() => {
+        delete window.__AGY_DESIGN_PENDING__[id];
+        reject(new Error('AI thiết kế quá thời gian chờ'));
+      }, 300000);
+      window.__AGY_DESIGN_PENDING__[id] = { resolve, reject, t };
+      try { window.agyDesignTheme(JSON.stringify({ id, image: refDataUrl })); }
+      catch (e) { clearTimeout(t); delete window.__AGY_DESIGN_PENDING__[id]; reject(e); }
+    });
+  }
+
+  const CSS_SAFE = /^[#a-zA-Z0-9(),.%\s\-/+]+$/;
+  function cssVal(v, fallback) {
+    if (typeof v !== 'string') return fallback;
+    const s = v.trim();
+    if (!s || s.length > 400 || !CSS_SAFE.test(s) || /url\s*\(|expression|import/i.test(s)) return fallback;
+    return s;
+  }
+  function numIn(v, lo, hi, fallback) {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
+  }
+  function svgToDataUri(markup, fallbackUri) {
+    if (typeof markup !== 'string') return fallbackUri;
+    const raw = markup.trim();
+    const start = raw.search(/<svg[\s>]/i);
+    const end = raw.lastIndexOf('</svg>');
+    if (start < 0 || end < start) return fallbackUri;
+    let s = raw.slice(start, end + 6);
+    if (s.length > 20000) return fallbackUri;
+    if (/<\s*(script|foreignObject|image|style|iframe|use)\b|\son\w+\s*=|javascript:|(?:xlink:)?href\s*=\s*["'](?!#)/i.test(s)) return fallbackUri;
+    if (!/xmlns=/.test(s)) s = s.replace(/^<svg/i, '<svg xmlns="http://www.w3.org/2000/svg"');
+    return 'data:image/svg+xml,' + encodeURIComponent(s);
+  }
+
+  function sanitizeDesignedTheme(raw, wallpaper, pal) {
+    const fb = buildThemeFromPalette(pal, wallpaper, 'AI Glass');
+    const ornaments = makeOrnaments(pal.primary, pal.secondary, pal.overlay);
+    const t = { ...fb };
+    ['primary', 'secondary', 'glow', 'secondaryGlow', 'bg', 'frameBg', 'textColor', 'borderColor', 'innerBorder',
+      'bgPosition', 'sidebarBg', 'sidebarHoverBg', 'aiCardBg', 'aiCardBorder', 'headerBg', 'headerBorder',
+      'btnBg', 'inputGlassBg', 'inputCardBg', 'modalBg', 'modalHeaderBg', 'cardBg', 'cardSelectedBg'
+    ].forEach((k) => { t[k] = cssVal(raw[k], fb[k]); });
+    if (typeof raw.concept === 'string' && raw.concept.trim()) t.concept = raw.concept.trim().slice(0, 80);
+    t.overlayRgb = /^\d{1,3},\s*\d{1,3},\s*\d{1,3}$/.test(String(raw.overlayRgb || '').trim()) ? String(raw.overlayRgb).trim() : fb.overlayRgb;
+    t.isLight = !!raw.isLight;
+    t.sidebarEnhanceText = raw.sidebarEnhanceText !== false;
+    if (t.isLight) {
+      ['uiTextColor', 'uiMutedColor', 'pillBg', 'pillHoverBg', 'pillTextColor', 'pillBorder'].forEach((k) => {
+        const v = cssVal(raw[k], fb[k]); if (v) t[k] = v;
+      });
+    } else {
+      delete t.isLight;
+      ['uiTextColor', 'uiMutedColor', 'pillBg', 'pillHoverBg', 'pillTextColor', 'pillBorder'].forEach((k) => {
+        const v = cssVal(raw[k], ''); if (v) t[k] = v;
+      });
+    }
+    t.cornerSvg = svgToDataUri(raw.cornerSvgMarkup, ornaments.cornerSvg);
+    t.sticker = svgToDataUri(raw.stickerSvgMarkup, ornaments.sticker);
+    t.isOrnament = true;
+    t.stickerW = numIn(raw.stickerW, 40, 200, 96);
+    t.stickerH = numIn(raw.stickerH, 12, 60, 30);
+    t.stickerTop = numIn(raw.stickerTop, -40, 0, -15);
+    t.stickerRight = numIn(raw.stickerRight, -20, 60, 14);
+    t.isAiDesigned = true;
+    return t;
+  }
+
+  async function createThemeFromImageFile(file, onStatus) {
+    if (!file || !/^image\//.test(file.type)) throw new Error('File không phải ảnh');
+    const { img, url } = await loadImageFromFile(file);
+    try {
+      const pal = analyzePalette(img);
+      const wallpaper = downscaleToDataUrl(img, 1920);
+      let aiNote = '';
+      let theme, aiName = '';
+      try {
+        if (onStatus) onStatus('AI đang nhìn ảnh và thiết kế preset (khoảng 1 phút, dùng quota Antigravity)…');
+        const raw = await requestAiDesign(downscaleToDataUrl(img, 1024, 'image/jpeg'));
+        theme = sanitizeDesignedTheme(raw, wallpaper, pal);
+        aiName = typeof raw.name === 'string' ? raw.name.trim().replace(/[^\p{L}\p{N} '&-]/gu, '').slice(0, 24) : '';
+      } catch (e) {
+        aiNote = `AI không khả dụng (${e.message || e}); dùng bản tự tính màu.`;
+        theme = buildThemeFromPalette(pal, wallpaper, `Tạo từ ảnh • ${pal.isLight ? 'Light' : 'Dark'} Glass`);
+      }
+      let base = aiName || (file.name || 'My Theme').replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim().slice(0, 24) || 'My Theme';
+      let name = base, i = 2;
+      while (THEMES[name]) name = `${base} ${i++}`;
+      const all = loadCustomThemes();
+      all[name] = theme;
+      const names = Object.keys(all);
+      while (names.length > MAX_CUSTOM_THEMES) {
+        const old = names.shift();
+        delete all[old]; delete THEMES[old];
+        const ix = THEME_KEYS.indexOf(old); if (ix >= 0) THEME_KEYS.splice(ix, 1);
+      }
+      THEMES[name] = theme;
+      if (!THEME_KEYS.includes(name)) THEME_KEYS.push(name);
+      persistCustomThemes(all);
+      applyTheme({ themeName: name, bubbleName: name });
+      return { name, pal: { primary: hexToRgbList(theme.primary), secondary: hexToRgbList(theme.secondary), overlay: theme.overlayRgb.split(',').map((x) => parseInt(x, 10)), isLight: !!theme.isLight }, wallpaper, aiNote, ai: !!theme.isAiDesigned };
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  function hexToRgbList(h) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(h || '');
+    if (!m) return [128, 128, 128];
+    const v = parseInt(m[1], 16);
+    return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+  }
+  function deletePreset(name) {
+    if (!THEMES[name] || THEME_KEYS.length <= 1) return false;
+    if (BUILTIN_KEYS.has(name)) {
+      const hidden = loadHiddenBuiltins();
+      if (!hidden.includes(name)) hidden.push(name);
+      persistHiddenBuiltins(hidden);
+    } else {
+      const all = loadCustomThemes();
+      delete all[name];
+      persistCustomThemes(all);
+    }
+    delete THEMES[name];
+    const ix = THEME_KEYS.indexOf(name);
+    if (ix >= 0) THEME_KEYS.splice(ix, 1);
+    const st = getState();
+    if (!THEMES[st.themeName] || !THEMES[st.bubbleName]) {
+      const nextTheme = THEMES[st.themeName] ? st.themeName : THEME_KEYS[0];
+      const nextBubble = THEMES[st.bubbleName] ? st.bubbleName : THEME_KEYS[0];
+      applyTheme({ themeName: nextTheme, bubbleName: nextBubble });
+    }
+    return true;
+  }
+
+  function clearAllCustomThemes() {
+    const customNames = THEME_KEYS.filter((k) => !BUILTIN_KEYS.has(k));
+    if (!customNames.length) return false;
+    customNames.forEach((name) => {
+      delete THEMES[name];
+      const ix = THEME_KEYS.indexOf(name);
+      if (ix >= 0) THEME_KEYS.splice(ix, 1);
+    });
+    if (THEME_KEYS.length === 0) {
+      persistHiddenBuiltins([]);
+      Object.keys(BUILTIN_THEMES).forEach((name) => {
+        THEMES[name] = BUILTIN_THEMES[name];
+        THEME_KEYS.push(name);
+      });
+    }
+    persistCustomThemes({});
+    const st = getState();
+    if (!THEMES[st.themeName] || !THEMES[st.bubbleName]) {
+      const nextTheme = THEMES[st.themeName] ? st.themeName : THEME_KEYS[0];
+      const nextBubble = THEMES[st.bubbleName] ? st.bubbleName : THEME_KEYS[0];
+      applyTheme({ themeName: nextTheme, bubbleName: nextBubble });
+    }
+    return true;
+  }
+
+  function restoreBuiltinThemes() {
+    persistHiddenBuiltins([]);
+    const customOrder = THEME_KEYS.filter((k) => !BUILTIN_KEYS.has(k));
+    THEME_KEYS.length = 0;
+    Object.keys(BUILTIN_THEMES).forEach((name) => {
+      THEMES[name] = BUILTIN_THEMES[name];
+      THEME_KEYS.push(name);
+    });
+    customOrder.forEach((name) => {
+      if (THEMES[name] && !THEME_KEYS.includes(name)) THEME_KEYS.push(name);
+    });
+  }
+
+  function closeQuickThemeMenu() {
+    const m = document.getElementById('agy-theme-popup-backdrop');
+    if (m) {
+      if (typeof m._cleanup === 'function') m._cleanup();
+      m.remove();
+    }
+    const b = document.getElementById('agy-custom-theme-topbar-btn');
+    if (b) b.setAttribute('aria-expanded', 'false');
+  }
+
+  function openImageThemePopup(anchor, initialFile) {
+    if (document.getElementById('agy-theme-popup-backdrop')) { if (!initialFile) { closeQuickThemeMenu(); return; } closeQuickThemeMenu(); }
+    const esc = escHtml;
+    const bd = document.createElement('div');
+    bd.id = 'agy-theme-popup-backdrop';
+    bd.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,0.52);display:flex;align-items:center;justify-content:center;app-region:no-drag;';
+    const card = document.createElement('div');
+    card.setAttribute('role', 'dialog');
+    card.style.cssText = 'width:min(520px,94vw);max-height:88vh;overflow:auto;padding:20px;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.6);font-size:13px;';
+    bd.appendChild(card);
+    let waitTimer = null;
+    bd._cleanup = () => { if (waitTimer) { clearInterval(waitTimer); waitTimer = null; } };
+
+    function render(statusHtml) {
+      const stState = getState();
+      const cur = THEMES[stState.themeName] || THEMES[getDefaultThemeKey()] || {};
+      const ink = cur.isLight ? '#0f172a' : '#f8fafc';
+      const muted = cur.isLight ? '#475569' : '#94a3b8';
+      const accent = cur.primary || '#38bdf8';
+      card.style.background = cur.modalBg || 'rgba(10,14,24,0.97)';
+      card.style.border = `1px solid ${cur.borderColor || 'rgba(255,255,255,0.15)'}`;
+      card.style.color = ink;
+
+      const customCount = THEME_KEYS.filter((k) => !BUILTIN_KEYS.has(k)).length;
+      const hiddenBuiltins = loadHiddenBuiltins();
+      const canDelete = THEME_KEYS.length > 1;
+      const rows = THEME_KEYS.map((name) => {
+        const th = THEMES[name];
+        const active = name === stState.themeName;
+        const isBuiltin = BUILTIN_KEYS.has(name);
+        const badge = isBuiltin ? 'Gốc' : (th.isAiDesigned ? 'AI' : 'Tự tạo');
+        const rowBg = active ? (cur.cardSelectedBg || 'rgba(255,255,255,0.10)') : 'rgba(128,128,128,0.06)';
+        return `
+          <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:10px;border:1px solid ${active ? accent : 'rgba(128,128,128,0.25)'};background:${rowBg};">
+            <button type="button" data-theme="${esc(name)}" style="flex:1;min-width:0;display:flex;align-items:center;gap:10px;padding:4px 6px;border:0;background:transparent;color:inherit;cursor:pointer;text-align:left;">
+              <span style="flex:none;width:18px;height:18px;border-radius:50%;background:linear-gradient(135deg,${th.primary},${th.secondary});box-shadow:0 0 0 1px rgba(255,255,255,0.25);"></span>
+              <span style="flex:1;min-width:0;display:flex;flex-direction:column;">
+                <span style="display:flex;align-items:center;gap:6px;">
+                  <span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(name)}</span>
+                  <span style="flex:none;font-size:10px;padding:1px 6px;border-radius:999px;border:1px solid rgba(128,128,128,0.3);color:${muted};">${badge}</span>
+                </span>
+                <span style="font-size:11px;color:${muted};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(th.concept || '')}</span>
+              </span>
+              ${active ? `<span style="flex:none;color:${accent};font-weight:700;padding-right:2px;">✓</span>` : ''}
+            </button>
+            ${canDelete ? `<button type="button" data-del="${esc(name)}" title="${isBuiltin ? 'Ẩn preset gốc' : 'Xóa preset'}" style="flex:none;width:28px;height:28px;border-radius:7px;border:1px solid rgba(239,68,68,0.28);background:rgba(239,68,68,0.1);color:#fca5a5;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;">🗑️</button>` : ''}
+          </div>`;
+      }).join('');
+
+      card.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <div style="font-size:16px;font-weight:700;">Tạo theme từ ảnh</div>
+          <button type="button" data-close style="border:0;background:transparent;color:inherit;font-size:18px;cursor:pointer;opacity:0.7;">✕</button>
+        </div>
+        <div data-drop tabindex="0" style="border:2px dashed ${accent};border-radius:14px;padding:24px 16px;text-align:center;cursor:pointer;background:${rgba(hexToRgbArr(accent), 0.08)};">
+          <div style="font-size:28px;line-height:1;">🖼️</div>
+          <div style="margin-top:8px;font-weight:600;">Thả ảnh vào đây, dán (Ctrl+V) hoặc bấm để chọn ảnh</div>
+          <div style="opacity:0.65;margin-top:4px;">AI nhìn ảnh &amp; thiết kế trọn bộ preset (dùng quota Antigravity)</div>
+          <input type="file" accept="image/*" data-file style="display:none;">
+        </div>
+        <div data-status style="margin-top:12px;min-height:20px;">${statusHtml || ''}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin:14px 0 8px;">
+          <div style="font-weight:600;">Theme của bạn (${THEME_KEYS.length})</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            ${hiddenBuiltins.length ? `<button type="button" data-restore-builtins style="border:1px solid rgba(128,128,128,0.4);background:transparent;color:inherit;border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer;">↺ Khôi phục gốc (${hiddenBuiltins.length})</button>` : ''}
+            ${customCount ? `<button type="button" data-clear-custom style="border:1px solid rgba(239,68,68,0.4);background:rgba(239,68,68,0.12);color:#fca5a5;border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer;">🗑️ Xóa tất cả tự tạo (${customCount})</button>` : ''}
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;max-height:240px;overflow-y:auto;padding-right:2px;">${rows}</div>
+        <div style="margin-top:14px;text-align:right;"><button type="button" data-studio style="border:1px solid rgba(128,128,128,0.4);background:transparent;color:inherit;border-radius:8px;padding:6px 12px;cursor:pointer;">Theme Studio…</button></div>`;
+
+      const drop = card.querySelector('[data-drop]');
+      const input = card.querySelector('[data-file]');
+      drop.addEventListener('click', () => input.click());
+      drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.style.background = rgba(hexToRgbArr(accent), 0.22); });
+      drop.addEventListener('dragleave', () => { drop.style.background = rgba(hexToRgbArr(accent), 0.08); });
+      drop.addEventListener('drop', (e) => { e.preventDefault(); handle(e.dataTransfer.files && e.dataTransfer.files[0]); });
+      input.addEventListener('change', () => handle(input.files && input.files[0]));
+      card.querySelector('[data-close]').addEventListener('click', closeQuickThemeMenu);
+      card.querySelector('[data-studio]').addEventListener('click', () => { closeQuickThemeMenu(); window.__ANTIGRAVITY_OPEN_THEME_MODAL__(); });
+      const clearBtn = card.querySelector('[data-clear-custom]');
+      if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+          if (clearAllCustomThemes()) render('🗑️ Đã xóa tất cả preset tự tạo.');
+        });
+      }
+      const restoreBtn = card.querySelector('[data-restore-builtins]');
+      if (restoreBtn) {
+        restoreBtn.addEventListener('click', () => {
+          restoreBuiltinThemes();
+          render('↺ Đã khôi phục các preset gốc.');
+        });
+      }
+      card.querySelectorAll('[data-theme]').forEach((el) => el.addEventListener('click', () => {
+        const name = el.getAttribute('data-theme');
+        applyTheme({ themeName: name, bubbleName: name });
+        render(`Đã chuyển sang <b>${esc(name)}</b>`);
+      }));
+      card.querySelectorAll('[data-del]').forEach((el) => {
+        el.addEventListener('mouseenter', () => { el.style.background = 'rgba(239,68,68,0.85)'; el.style.color = '#fff'; });
+        el.addEventListener('mouseleave', () => { el.style.background = 'rgba(239,68,68,0.1)'; el.style.color = '#fca5a5'; });
+        el.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const name = el.getAttribute('data-del');
+          if (name && deletePreset(name)) {
+            render(`🗑️ Đã xóa preset <b>${esc(name)}</b>`);
+          }
+        });
+      });
+    }
+
+    async function handle(file) {
+      if (!file) return;
+      if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
+      const started = Date.now();
+      let baseMsg = 'Đang chuẩn bị ảnh…';
+      const paintStatus = () => {
+        const s0 = card.querySelector('[data-status]');
+        if (s0) s0.innerHTML = `⏳ ${esc(baseMsg)} (${Math.floor((Date.now() - started) / 1000)}s)`;
+      };
+      paintStatus();
+      waitTimer = setInterval(paintStatus, 1000);
+      try {
+        const r = await createThemeFromImageFile(file, (m) => { baseMsg = m; paintStatus(); });
+        clearInterval(waitTimer); waitTimer = null;
+        const sw = (c) => `<span style="display:inline-block;width:22px;height:22px;border-radius:6px;background:${toHex(c)};border:1px solid rgba(255,255,255,0.3);"></span>`;
+        render(`<div style="display:flex;align-items:center;gap:12px;"><img src="${r.wallpaper}" style="width:96px;height:60px;object-fit:cover;border-radius:8px;"><div><div>✅ Đã áp dụng <b>${esc(r.name)}</b> (${r.ai ? 'AI design' : (r.pal.isLight ? 'Light' : 'Dark') + ' Glass'})</div>${r.aiNote ? '<div style="margin-top:4px;opacity:0.8;">⚠️ ' + esc(r.aiNote) + '</div>' : ''}<div style="display:flex;gap:6px;margin-top:6px;">${sw(r.pal.primary)}${sw(r.pal.secondary)}${sw(r.pal.overlay)}</div></div></div>`);
+      } catch (err) {
+        if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
+        const st2 = card.querySelector('[data-status]');
+        if (st2) st2.innerHTML = `⚠️ ${esc(err.message || err)}`;
+      }
+    }
+
+    function hexToRgbArr(h) {
+      const m = /^#?([0-9a-f]{6})$/i.exec(h || '');
+      if (!m) return [56, 189, 248];
+      const v = parseInt(m[1], 16);
+      return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+    }
+
+    render('');
+    bd.addEventListener('mousedown', (e) => { if (e.target === bd) closeQuickThemeMenu(); });
+    document.body.appendChild(bd);
+    anchor.setAttribute('aria-expanded', 'true');
+    const onKey = (e) => {
+      if (!document.getElementById('agy-theme-popup-backdrop')) { document.removeEventListener('keydown', onKey, true); document.removeEventListener('paste', onPaste, true); return; }
+      if (e.key === 'Escape') closeQuickThemeMenu();
+    };
+    const onPaste = (e) => {
+      const items = (e.clipboardData && e.clipboardData.items) || [];
+      for (const it of items) if (it.type.startsWith('image/')) { handle(it.getAsFile()); e.preventDefault(); return; }
+    };
+    document.addEventListener('keydown', onKey, true);
+    document.addEventListener('paste', onPaste, true);
+    if (initialFile) handle(initialFile);
+  }
+
+  function injectTopbarButton() {
+    if (document.getElementById('agy-custom-theme-topbar-btn')) return;
+    const toolbar = document.querySelector('[data-testid="pane-titlebar-toolbar"]');
+    const group = toolbar && (toolbar.querySelector(':scope > div') || toolbar);
+    if (!group) return;
+    const btn = document.createElement('button');
+    btn.id = 'agy-custom-theme-topbar-btn';
+    btn.type = 'button';
+    btn.setAttribute('aria-label', 'Create theme from image');
+    btn.setAttribute('aria-haspopup', 'menu');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.title = 'Tạo theme từ ảnh';
+    btn.className = 'agy-button agy-button-icon-lg inline-flex items-center font-medium transition-colors select-none outline-none cursor-pointer justify-center h-7 w-7 shrink-0 rounded-lg bg-transparent text-secondary-foreground hover:text-foreground hover:bg-secondary focus-visible:text-foreground focus-visible:bg-secondary';
+    btn.style.cssText = 'app-region: no-drag;';
+    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:none;"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openImageThemePopup(btn);
+    });
+    const dropFile = (e) => { const f = e.dataTransfer && Array.from(e.dataTransfer.files || []).find((x) => /^image\//.test(x.type)); return f || null; };
+    btn.addEventListener('dragenter', (e) => { e.preventDefault(); btn.style.boxShadow = '0 0 0 2px ' + ((THEMES[getState().themeName] || {}).primary || '#38bdf8'); });
+    btn.addEventListener('dragover', (e) => { e.preventDefault(); });
+    btn.addEventListener('dragleave', () => { btn.style.boxShadow = ''; });
+    btn.addEventListener('drop', (e) => { e.preventDefault(); e.stopPropagation(); btn.style.boxShadow = ''; const f = dropFile(e); openImageThemePopup(btn, f); });
+    group.insertBefore(btn, group.firstChild);
+  }
+
   function tick() {
+    injectTopbarButton();
     injectMainSidebarButton();
     injectSettingsModalButton();
     hookSidebarScroll();
@@ -1688,6 +2350,10 @@
   document.querySelectorAll('[data-agy-tbo-mounted]').forEach(el => delete el.dataset.agyTboMounted);
   const staleBackdrop = document.getElementById('agy-custom-theme-modal-backdrop');
   if (staleBackdrop) staleBackdrop.remove();
+  const staleTopbarBtn = document.getElementById('agy-custom-theme-topbar-btn');
+  if (staleTopbarBtn) staleTopbarBtn.remove();
+  const staleQuickMenu = document.getElementById('agy-theme-popup-backdrop');
+  if (staleQuickMenu) staleQuickMenu.remove();
   const staleSidebarBtn = document.getElementById('agy-custom-theme-sidebar-btn');
   if (staleSidebarBtn) staleSidebarBtn.remove();
   const staleSettingsBtn = document.getElementById('agy-custom-theme-settings-btn');
