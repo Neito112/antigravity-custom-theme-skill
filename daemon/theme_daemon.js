@@ -204,11 +204,48 @@ function createSession(target) {
         } catch (_) {}
     };
 
+    async function ensureBindings() {
+        try {
+            await send('Runtime.evaluate', {
+                expression: 'delete window.agySaveThemeConfig; delete window.agyDesignTheme;',
+                awaitPromise: false,
+            });
+        } catch (_) {}
+        try {
+            await send('Runtime.addBinding', { name: 'agySaveThemeConfig' });
+        } catch (_) {}
+        try {
+            await send('Runtime.addBinding', { name: 'agyDesignTheme' });
+        } catch (_) {}
+    }
+
+    let reinjecting = false;
     session.reinject = async () => {
+        if (reinjecting) return;
         const src = buildInjectedSource();
         if (!src) return;
+        reinjecting = true;
         try {
+            await ensureBindings();
             await send('Runtime.evaluate', { expression: src, awaitPromise: false });
+        } catch (_) {
+        } finally {
+            reinjecting = false;
+        }
+    };
+
+    session.ensureHealthy = async () => {
+        if (ws.readyState !== 1 || reinjecting) return;
+        try {
+            const res = await send('Runtime.evaluate', {
+                expression: "Boolean(document.getElementById('antigravity-custom-theme-active') && document.getElementById('agy-custom-theme-topbar-btn'))",
+                returnByValue: true,
+                awaitPromise: false,
+            });
+            if (!res || !res.result || res.result.value !== true) {
+                log(`Self-healing target ${target.id} (theme or topbar button missing).`);
+                await session.reinject();
+            }
         } catch (_) {}
     };
 
@@ -269,7 +306,11 @@ function createSession(target) {
             return;
         }
 
-        if (msg.method === 'Page.frameNavigated' && msg.params && msg.params.frame && !msg.params.frame.parentId) {
+        if (
+            (msg.method === 'Page.frameNavigated' && msg.params && msg.params.frame && !msg.params.frame.parentId) ||
+            msg.method === 'Page.loadEventFired' ||
+            msg.method === 'Page.domContentEventFired'
+        ) {
             await session.reinject();
         }
     });
@@ -278,18 +319,7 @@ function createSession(target) {
         try {
             await send('Page.enable');
             await send('Runtime.enable');
-            try {
-                await send('Runtime.evaluate', {
-                    expression: 'delete window.agySaveThemeConfig; delete window.agyDesignTheme;',
-                    awaitPromise: false,
-                });
-            } catch (_) {}
-            try {
-                await send('Runtime.addBinding', { name: 'agySaveThemeConfig' });
-            } catch (_) {}
-            try {
-                await send('Runtime.addBinding', { name: 'agyDesignTheme' });
-            } catch (_) {}
+            await ensureBindings();
 
             const src = buildInjectedSource();
             if (src) {
@@ -302,7 +332,12 @@ function createSession(target) {
         }
     });
 
+    const healthTimer = setInterval(() => {
+        session.ensureHealthy();
+    }, 10000);
+
     const cleanup = () => {
+        clearInterval(healthTimer);
         for (const p of pending.values()) {
             p.reject(new Error('WebSocket closed'));
         }

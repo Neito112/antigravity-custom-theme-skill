@@ -904,11 +904,17 @@
 
   function removeCustomTheme() {
     clearTitleBarTimers();
+    if (window.__AGY_TOPBAR_WATCHDOG__) {
+      clearInterval(window.__AGY_TOPBAR_WATCHDOG__);
+      window.__AGY_TOPBAR_WATCHDOG__ = null;
+    }
     if (window.__AGY_SCROLL_AC__) {
       try { window.__AGY_SCROLL_AC__.abort(); } catch (e) {}
     }
     const styleEl = document.getElementById('antigravity-custom-theme-active');
     if (styleEl) styleEl.remove();
+    const topbarBtn = document.getElementById('agy-custom-theme-topbar-btn');
+    if (topbarBtn) topbarBtn.remove();
     const navBtn = document.getElementById('agy-custom-theme-sidebar-btn');
     if (navBtn) navBtn.remove();
     const settingsBtn = document.getElementById('agy-custom-theme-settings-btn');
@@ -2358,20 +2364,54 @@
     if (initialFile) handle(initialFile);
   }
 
-  function injectTopbarButton() {
-    if (document.getElementById('agy-custom-theme-topbar-btn')) return;
+  function findTopbarMountTarget() {
     const toolbar = document.querySelector('[data-testid="pane-titlebar-toolbar"]');
-    const group = toolbar && (toolbar.querySelector(':scope > div') || toolbar);
-    if (!group) return;
+    if (toolbar) {
+      const group = toolbar.querySelector(':scope > div') || toolbar;
+      const moreBtn = group.querySelector('[data-testid="titlebar-more-actions"]');
+      return { parent: group, before: moreBtn || group.firstChild, mode: 'native' };
+    }
+    const anchorBtn =
+      document.querySelector('[data-testid="titlebar-more-actions"]') ||
+      document.querySelector('[data-testid="toggle-overview-panel"]');
+    if (anchorBtn && anchorBtn.parentElement) {
+      return { parent: anchorBtn.parentElement, before: anchorBtn, mode: 'native' };
+    }
+    const titlebar =
+      document.querySelector('[class*="@container/titlebar"]') ||
+      document.querySelector('[data-main-content-header]') ||
+      document.querySelector('header');
+    if (titlebar) {
+      const rightGroup = titlebar.lastElementChild || titlebar;
+      return { parent: rightGroup, before: rightGroup.firstChild, mode: 'native' };
+    }
+    if (document.body) {
+      return { parent: document.body, before: null, mode: 'floating' };
+    }
+    return null;
+  }
+
+  function styleTopbarButton(btn, mode) {
+    btn.dataset.agyMountMode = mode;
+    if (mode === 'floating') {
+      const th = THEMES[getState().themeName] || THEMES[getDefaultThemeKey()] || {};
+      btn.className = 'inline-flex items-center justify-center cursor-pointer select-none outline-none';
+      btn.style.cssText = `position:fixed;top:8px;right:156px;z-index:2147482000;width:28px;height:28px;border-radius:8px;app-region:no-drag;background:${th.btnBg || 'rgba(15, 23, 42, 0.72)'};border:1px solid ${th.borderColor || 'rgba(255,255,255,0.18)'};color:${th.primary || '#38bdf8'};box-shadow:0 4px 14px rgba(0,0,0,0.35);`;
+    } else {
+      btn.className = 'agy-button agy-button-icon-lg inline-flex items-center font-medium transition-colors select-none outline-none cursor-pointer justify-center h-7 w-7 shrink-0 rounded-lg bg-transparent text-secondary-foreground hover:text-foreground hover:bg-secondary focus-visible:text-foreground focus-visible:bg-secondary';
+      btn.style.cssText = 'app-region: no-drag;';
+    }
+  }
+
+  function createTopbarButton(mode) {
     const btn = document.createElement('button');
     btn.id = 'agy-custom-theme-topbar-btn';
     btn.type = 'button';
-    btn.setAttribute('aria-label', 'Create theme from image');
-    btn.setAttribute('aria-haspopup', 'menu');
+    btn.setAttribute('aria-label', 'Custom Theme Studio');
+    btn.setAttribute('aria-haspopup', 'dialog');
     btn.setAttribute('aria-expanded', 'false');
     btn.title = 'Custom Theme Studio (hoặc thả ảnh vào đây)';
-    btn.className = 'agy-button agy-button-icon-lg inline-flex items-center font-medium transition-colors select-none outline-none cursor-pointer justify-center h-7 w-7 shrink-0 rounded-lg bg-transparent text-secondary-foreground hover:text-foreground hover:bg-secondary focus-visible:text-foreground focus-visible:bg-secondary';
-    btn.style.cssText = 'app-region: no-drag;';
+    styleTopbarButton(btn, mode);
     btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:none;"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>';
     btn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -2381,9 +2421,44 @@
     const dropFile = (e) => { const f = e.dataTransfer && Array.from(e.dataTransfer.files || []).find((x) => /^image\//.test(x.type)); return f || null; };
     btn.addEventListener('dragenter', (e) => { e.preventDefault(); btn.style.boxShadow = '0 0 0 2px ' + ((THEMES[getState().themeName] || {}).primary || '#38bdf8'); });
     btn.addEventListener('dragover', (e) => { e.preventDefault(); });
-    btn.addEventListener('dragleave', () => { btn.style.boxShadow = ''; });
-    btn.addEventListener('drop', (e) => { e.preventDefault(); e.stopPropagation(); btn.style.boxShadow = ''; const f = dropFile(e); openCustomThemeModal(f); });
-    group.insertBefore(btn, group.firstChild);
+    btn.addEventListener('dragleave', () => { btn.style.boxShadow = btn.dataset.agyMountMode === 'floating' ? '0 4px 14px rgba(0,0,0,0.35)' : ''; });
+    btn.addEventListener('drop', (e) => { e.preventDefault(); e.stopPropagation(); btn.style.boxShadow = btn.dataset.agyMountMode === 'floating' ? '0 4px 14px rgba(0,0,0,0.35)' : ''; const f = dropFile(e); openCustomThemeModal(f); });
+    return btn;
+  }
+
+  function injectTopbarButton() {
+    const target = findTopbarMountTarget();
+    if (!target || !target.parent) return;
+
+    const all = document.querySelectorAll('#agy-custom-theme-topbar-btn');
+    if (all.length > 1) {
+      for (let i = 1; i < all.length; i++) all[i].remove();
+    }
+    const existing = all[0] || null;
+
+    if (existing && existing.isConnected) {
+      const rect = existing.getBoundingClientRect();
+      const visible = rect.width > 0 && rect.height > 0;
+      const inTarget = existing.parentElement === target.parent;
+      const sameMode = existing.dataset.agyMountMode === target.mode;
+      if (visible && inTarget && sameMode) return;
+      styleTopbarButton(existing, target.mode);
+      if (!inTarget) {
+        if (target.before && target.before.parentElement === target.parent) {
+          target.parent.insertBefore(existing, target.before);
+        } else {
+          target.parent.appendChild(existing);
+        }
+      }
+      return;
+    }
+
+    const btn = createTopbarButton(target.mode);
+    if (target.before && target.before.parentElement === target.parent) {
+      target.parent.insertBefore(btn, target.before);
+    } else {
+      target.parent.appendChild(btn);
+    }
   }
 
   function tick() {
@@ -2403,6 +2478,10 @@
   }
 
   clearTitleBarTimers();
+  if (window.__AGY_TOPBAR_WATCHDOG__) {
+    clearInterval(window.__AGY_TOPBAR_WATCHDOG__);
+    window.__AGY_TOPBAR_WATCHDOG__ = null;
+  }
   if (window.__AGY_TICK_RAF__) {
     cancelAnimationFrame(window.__AGY_TICK_RAF__);
     window.__AGY_TICK_RAF__ = 0;
@@ -2415,10 +2494,12 @@
     try { window.__AGY_SCROLL_AC__.abort(); } catch (e) {}
   }
   window.__AGY_SCROLL_AC__ = new AbortController();
-  window.addEventListener('load', () => scheduleTitleBarSync(), { signal: window.__AGY_SCROLL_AC__.signal });
-  window.addEventListener('focus', () => syncTitleBarOverlay(), { signal: window.__AGY_SCROLL_AC__.signal });
+  window.addEventListener('load', () => { scheduleTitleBarSync(); injectTopbarButton(); }, { signal: window.__AGY_SCROLL_AC__.signal });
+  window.addEventListener('focus', () => { syncTitleBarOverlay(); injectTopbarButton(); }, { signal: window.__AGY_SCROLL_AC__.signal });
+  window.addEventListener('popstate', () => scheduleTick(), { signal: window.__AGY_SCROLL_AC__.signal });
+  window.addEventListener('hashchange', () => scheduleTick(), { signal: window.__AGY_SCROLL_AC__.signal });
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) syncTitleBarOverlay();
+    if (!document.hidden) { syncTitleBarOverlay(); injectTopbarButton(); }
   }, { signal: window.__AGY_SCROLL_AC__.signal });
   document.querySelectorAll('[data-agy-scroll-bound]').forEach(el => delete el.dataset.agyScrollBound);
   document.querySelectorAll('[data-agy-tbo-mounted]').forEach(el => delete el.dataset.agyTboMounted);
@@ -2444,6 +2525,9 @@
     attributes: true,
     attributeFilter: ['data-has-browser-hole', 'data-browser-hole']
   });
+  window.__AGY_TOPBAR_WATCHDOG__ = setInterval(() => {
+    try { injectTopbarButton(); } catch (e) {}
+  }, 2000);
   tick();
 
   return 'Antigravity Custom Theme Engine Ready!';
