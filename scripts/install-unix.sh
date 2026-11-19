@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DAEMON_JS="$REPO_ROOT/daemon/theme_daemon.js"
 PAYLOAD_JS="$REPO_ROOT/dist/theme_payload.js"
+BUILD_JS="$REPO_ROOT/scripts/build_payload.js"
 BUILD_PY="$REPO_ROOT/scripts/build_payload.py"
 PID_FILE="$REPO_ROOT/daemon.pid"
 LOG_FILE="$REPO_ROOT/daemon.log"
@@ -29,6 +30,12 @@ find_node() {
 }
 
 ensure_payload() {
+    local node_bin="${1:-node}"
+    if [ -f "$BUILD_JS" ]; then
+        echo "[install-unix] Building dist/theme_payload.js..."
+        "$node_bin" "$BUILD_JS"
+        return 0
+    fi
     if [ -f "$PAYLOAD_JS" ]; then
         return 0
     fi
@@ -38,7 +45,7 @@ ensure_payload() {
     elif command -v python >/dev/null 2>&1; then
         py_bin="$(command -v python)"
     else
-        echo "[install-unix] Error: dist/theme_payload.js missing and python3/python not found." >&2
+        echo "[install-unix] Error: build_payload.js missing and python3/python not found." >&2
         exit 1
     fi
     echo "[install-unix] Building dist/theme_payload.js..."
@@ -55,6 +62,9 @@ stop_existing_pid() {
             sleep 0.4
         fi
         rm -f "$PID_FILE"
+    fi
+    if command -v pkill >/dev/null 2>&1; then
+        pkill -f "daemon/theme_daemon\.js" 2>/dev/null || true
     fi
 }
 
@@ -138,7 +148,7 @@ cmd="${1:-install}"
 case "$cmd" in
     --foreground|foreground|run)
         NODE_BIN="$(find_node)"
-        ensure_payload
+        ensure_payload "$NODE_BIN"
         stop_existing_pid
         exec "$NODE_BIN" "$DAEMON_JS"
         ;;
@@ -164,7 +174,7 @@ case "$cmd" in
         ;;
     install)
         NODE_BIN="$(find_node)"
-        ensure_payload
+        ensure_payload "$NODE_BIN"
         stop_existing_pid
         OS_NAME="$(uname -s)"
         case "$OS_NAME" in

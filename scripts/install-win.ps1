@@ -1,5 +1,6 @@
 param(
-    [switch]$NoStartup
+    [switch]$NoStartup,
+    [switch]$Foreground
 )
 
 $ErrorActionPreference = 'Stop'
@@ -8,7 +9,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent $ScriptDir
 $DaemonJs = Join-Path $RepoRoot 'daemon\theme_daemon.js'
 $PayloadJs = Join-Path $RepoRoot 'dist\theme_payload.js'
-$BuildPy = Join-Path $RepoRoot 'scripts\build_payload.py'
+$BuildJs = Join-Path $ScriptDir 'build_payload.js'
 $PidFile = Join-Path $RepoRoot 'daemon.pid'
 $VbsPath = Join-Path $RepoRoot 'silent-start.vbs'
 
@@ -22,19 +23,20 @@ if ($NodeMajor -lt 22) {
     Write-Error "Node.js >= 22 is required (found v$NodeMajor at $NodeExe)."
 }
 
-if (-not (Test-Path $PayloadJs)) {
-    $PyCmd = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $PyCmd) {
-        $PyCmd = Get-Command python3 -ErrorAction SilentlyContinue
-    }
-    if (-not $PyCmd) {
-        Write-Error "dist/theme_payload.js is missing and Python was not found to build it."
-    }
-    Write-Host "[install-win] Building dist/theme_payload.js..."
-    & $PyCmd.Source $BuildPy
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "build_payload.py failed with exit code $LASTEXITCODE."
-    }
+Write-Host "[install-win] Building dist/theme_payload.js..."
+& $NodeExe $BuildJs
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "build_payload.js failed with exit code $LASTEXITCODE."
+}
+
+$ExistingDaemons = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -match 'theme_daemon\.js' }
+foreach ($Proc in $ExistingDaemons) {
+    Write-Host "[install-win] Stopping existing theme daemon (PID $($Proc.ProcessId))..."
+    Stop-Process -Id $Proc.ProcessId -Force -ErrorAction SilentlyContinue
+}
+if ($ExistingDaemons) {
+    Start-Sleep -Milliseconds 350
 }
 
 if (Test-Path $PidFile) {
@@ -73,6 +75,12 @@ if (-not $NoStartup) {
     $Shortcut.Description = 'Antigravity Custom Theme Daemon'
     $Shortcut.Save()
     Write-Host "[install-win] Startup shortcut created: $ShortcutPath"
+}
+
+if ($Foreground) {
+    Write-Host "[install-win] Running daemon in foreground..."
+    & $NodeExe $DaemonJs
+    exit $LASTEXITCODE
 }
 
 Write-Host "[install-win] Launching daemon via wscript.exe..."

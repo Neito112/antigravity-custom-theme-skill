@@ -2364,9 +2364,15 @@
     if (initialFile) handle(initialFile);
   }
 
+  function isElementVisible(el) {
+    if (!el || !el.getBoundingClientRect) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+
   function findTopbarMountTarget() {
     const toolbar = document.querySelector('[data-testid="pane-titlebar-toolbar"]');
-    if (toolbar) {
+    if (isElementVisible(toolbar)) {
       const group = toolbar.querySelector(':scope > div') || toolbar;
       const moreBtn = group.querySelector('[data-testid="titlebar-more-actions"]');
       return { parent: group, before: moreBtn || group.firstChild, mode: 'native' };
@@ -2374,16 +2380,22 @@
     const anchorBtn =
       document.querySelector('[data-testid="titlebar-more-actions"]') ||
       document.querySelector('[data-testid="toggle-overview-panel"]');
-    if (anchorBtn && anchorBtn.parentElement) {
+    if (isElementVisible(anchorBtn) && anchorBtn.parentElement) {
       return { parent: anchorBtn.parentElement, before: anchorBtn, mode: 'native' };
+    }
+    const ideTitlebar = document.querySelector('.part.titlebar .titlebar-right');
+    if (isElementVisible(ideTitlebar)) {
+      return { parent: ideTitlebar, before: ideTitlebar.firstChild, mode: 'native' };
     }
     const titlebar =
       document.querySelector('[class*="@container/titlebar"]') ||
       document.querySelector('[data-main-content-header]') ||
       document.querySelector('header');
-    if (titlebar) {
+    if (isElementVisible(titlebar)) {
       const rightGroup = titlebar.lastElementChild || titlebar;
-      return { parent: rightGroup, before: rightGroup.firstChild, mode: 'native' };
+      if (isElementVisible(rightGroup)) {
+        return { parent: rightGroup, before: rightGroup.firstChild, mode: 'native' };
+      }
     }
     if (document.body) {
       return { parent: document.body, before: null, mode: 'floating' };

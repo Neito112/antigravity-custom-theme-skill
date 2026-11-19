@@ -143,16 +143,23 @@ function buildInjectedSource() {
 
 function getPortInfo() {
     const portFile = resolvePortFile();
-    if (!fs.existsSync(portFile)) return null;
-    const lines = fs
-        .readFileSync(portFile, 'utf8')
-        .trim()
-        .split(/\r?\n/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-    const port = parseInt(lines[0], 10);
-    if (!Number.isFinite(port) || port <= 0) return null;
-    return { port, token: lines[1] || '' };
+    if (fs.existsSync(portFile)) {
+        const lines = fs
+            .readFileSync(portFile, 'utf8')
+            .trim()
+            .split(/\r?\n/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+        const port = parseInt(lines[0], 10);
+        if (Number.isFinite(port) && port > 0) {
+            return { port, token: lines[1] || '', source: portFile };
+        }
+    }
+    const envPort = parseInt(process.env.AGY_CDP_PORT || '', 10);
+    if (Number.isFinite(envPort) && envPort > 0) {
+        return { port: envPort, token: '', source: 'AGY_CDP_PORT' };
+    }
+    return { port: 9222, token: '', source: 'fallback:9222', isFallback: true };
 }
 
 function fetchJson(url) {
@@ -348,6 +355,7 @@ function createSession(target) {
     ws.addEventListener('error', cleanup);
 }
 
+let missingCdpLogged = false;
 async function scanPages() {
     const info = getPortInfo();
     if (!info) return;
@@ -365,7 +373,12 @@ async function scanPages() {
     let targets;
     try {
         targets = await fetchJson(`http://127.0.0.1:${info.port}/json`);
+        missingCdpLogged = false;
     } catch (_) {
+        if (!missingCdpLogged) {
+            log(`Waiting for Antigravity CDP (${info.source}, port ${info.port}). Ensure Antigravity is running with DevToolsActivePort or --remote-debugging-port=9222.`);
+            missingCdpLogged = true;
+        }
         return;
     }
     if (!Array.isArray(targets)) return;
@@ -373,8 +386,23 @@ async function scanPages() {
     const pages = targets.filter((t) => {
         if (!t || t.type !== 'page' || !t.webSocketDebuggerUrl) return false;
         const url = String(t.url || '');
-        if (url.startsWith('devtools://') || url.startsWith('chrome-extension://')) return false;
-        return url.includes('127.0.0.1') || url.includes('workbench') || url.includes('launchpad');
+        if (
+            !url ||
+            url.startsWith('devtools://') ||
+            url.startsWith('chrome-extension://') ||
+            url.startsWith('data:') ||
+            url.startsWith('about:')
+        ) {
+            return false;
+        }
+        return (
+            url.includes('127.0.0.1') ||
+            url.includes('localhost') ||
+            url.includes('workbench') ||
+            url.includes('launchpad') ||
+            url.startsWith('vscode-file://') ||
+            url.startsWith('antigravity://')
+        );
     });
 
     const liveIds = new Set(pages.map((p) => p.id));

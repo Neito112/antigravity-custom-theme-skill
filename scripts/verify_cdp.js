@@ -112,6 +112,8 @@ const INSPECT_EXPR = `(() => {
     const liveBlurScrollers = scrollers.filter((el) => /blur\\(/i.test(getComputedStyle(el).backdropFilter || ''));
     const shellBackdrop = shellEl ? (getComputedStyle(shellEl).backdropFilter || 'none') : 'none';
     const hasLiveBlurRule = /blur\\(/i.test(shellBackdrop) || liveBlurScrollers.length > 0;
+    const topbarBtn = document.getElementById('agy-custom-theme-topbar-btn');
+    const topbarRect = topbarBtn ? topbarBtn.getBoundingClientRect() : null;
     return {
         url: location.href,
         viewport: { width: window.innerWidth, height: window.innerHeight },
@@ -127,23 +129,50 @@ const INSPECT_EXPR = `(() => {
         scrollerCount: scrollers.length,
         liveBlurScrollerCount: liveBlurScrollers.length,
         hasLiveBlurRule,
+        topbarButtonPresent: Boolean(topbarBtn),
+        topbarButtonMode: topbarBtn ? (topbarBtn.dataset.agyMountMode || 'native') : null,
+        topbarButtonVisible: Boolean(topbarRect && topbarRect.width > 0 && topbarRect.height > 0),
         settingsTriggerPresent: Boolean(document.getElementById('agy-custom-theme-sidebar-btn')),
         composerPresent: Boolean(document.querySelector('div.relative.flex.flex-col.rounded-lg.border')),
     };
 })()`;
 
-async function main() {
+async function resolvePort() {
     const portFile = resolvePortFile();
-    if (!fs.existsSync(portFile)) {
-        console.error(`[verify-cdp] DevToolsActivePort not found at: ${portFile}`);
+    if (fs.existsSync(portFile)) {
+        const port = parseInt(fs.readFileSync(portFile, 'utf8').trim().split(/\r?\n/)[0], 10);
+        if (Number.isFinite(port) && port > 0) return port;
+    }
+    const envPort = parseInt(process.env.AGY_CDP_PORT || '', 10);
+    if (Number.isFinite(envPort) && envPort > 0) return envPort;
+    return 9222;
+}
+
+async function main() {
+    const port = await resolvePort();
+    let targets;
+    try {
+        targets = await fetchJson(`http://127.0.0.1:${port}/json`);
+    } catch (err) {
+        console.error(`[verify-cdp] Cannot connect to Antigravity CDP on port ${port}: ${err.message}`);
+        console.error(`[verify-cdp] Checked DevToolsActivePort at: ${resolvePortFile()}`);
         process.exit(1);
     }
-
-    const port = parseInt(fs.readFileSync(portFile, 'utf8').trim().split(/\r?\n/)[0], 10);
-    const targets = await fetchJson(`http://127.0.0.1:${port}/json`);
-    const pages = (Array.isArray(targets) ? targets : []).filter(
-        (t) => t && t.type === 'page' && t.webSocketDebuggerUrl && String(t.url || '').includes('127.0.0.1')
-    );
+    const pages = (Array.isArray(targets) ? targets : []).filter((t) => {
+        if (!t || t.type !== 'page' || !t.webSocketDebuggerUrl) return false;
+        const url = String(t.url || '');
+        if (!url || url.startsWith('devtools://') || url.startsWith('chrome-extension://') || url.startsWith('data:') || url.startsWith('about:')) {
+            return false;
+        }
+        return (
+            url.includes('127.0.0.1') ||
+            url.includes('localhost') ||
+            url.includes('workbench') ||
+            url.includes('launchpad') ||
+            url.startsWith('vscode-file://') ||
+            url.startsWith('antigravity://')
+        );
+    });
 
     if (pages.length === 0) {
         console.error(`[verify-cdp] No Antigravity CDP page targets found on port ${port}.`);
@@ -167,7 +196,11 @@ async function main() {
         console.error('[verify-cdp] FAIL: Detected backdrop-filter blur rule in injected style.');
         process.exit(1);
     }
-    console.log(`[verify-cdp] PASS: ${themedPages.length}/${results.length} page(s) themed with zero live blur.`);
+    if (!themedPages.every((r) => r.topbarButtonPresent && r.topbarButtonVisible)) {
+        console.error('[verify-cdp] FAIL: #agy-custom-theme-topbar-btn missing or hidden on themed page(s).');
+        process.exit(1);
+    }
+    console.log(`[verify-cdp] PASS: ${themedPages.length}/${results.length} page(s) themed with topbar button visible and zero live blur.`);
 }
 
 main().catch((err) => {
